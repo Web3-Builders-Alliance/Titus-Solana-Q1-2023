@@ -5,7 +5,7 @@ use solana_program::{
     msg,
     pubkey::Pubkey,
     program_pack::{Pack, IsInitialized},
-    sysvar::{rent::Rent, Sysvar},
+    sysvar::{rent::Rent, Sysvar, clock},
     program::{invoke, invoke_signed},
 };
 
@@ -15,10 +15,13 @@ use crate::{instruction::EscrowInstruction, error::EscrowError, state::Escrow};
 
 pub struct Processor;
 impl Processor {
+    ///referenced data from the entrypoint is passed into process as function parameters
     pub fn process(program_id: &Pubkey, accounts: &[AccountInfo], instruction_data: &[u8]) -> ProgramResult {
 
+        ///the unpack function within EscrowInstruction is passed the instruction_data and kept in 'instruction' variable
         let instruction = EscrowInstruction::unpack(instruction_data)?;
 
+        ///this match statement is looking at all elements of the EscrowInstruction enum and matching them to the corresponding function found below (within the Processor impl scope)
         match instruction {
             EscrowInstruction::InitEscrow { amount } => {
                 msg!("Instruction: InitEscrow");
@@ -28,6 +31,14 @@ impl Processor {
                 msg!("Instruction: Exchange");
                 Self::process_exchange(accounts, amount, program_id)
             }
+            EscrowInstruction::ResetTimeLock {  } => {
+                msg!("Instruction: Reset Time Lock");
+                Self::todo()
+            }
+            EscrowInstruction::Cancel {  } => {
+                msg!("Instruction: Cancel Escrow Transfer");
+                Self::todo()
+            }
         }
     }
 
@@ -36,20 +47,29 @@ impl Processor {
         amount: u64,
         program_id: &Pubkey,
     ) -> ProgramResult {
+        ///since accounts is a borrowed reference of the AccountInfo array, .iter() is used.
+        /// made mutable in order to take elements out of it
         let account_info_iter = &mut accounts.iter();
+
+        /// a native Solana function that iterates thru the next item in AccountInfo and returns
+        /// a solana ProgramError instead of an option (see use of "?")
         let initializer = next_account_info(account_info_iter)?;
         
+        /// checks to make sure the initializer and the signer are the same. 
         if !initializer.is_signer {
             return Err(ProgramError::MissingRequiredSignature);
         }
 
+        ///ownership will be transfered to the PDA
         let temp_token_account = next_account_info(account_info_iter)?;
 
+        ///checks to make sure the receiving token account is owned by the token program
         let token_to_receive_account = next_account_info(account_info_iter)?;
         if *token_to_receive_account.owner != spl_token::id() {
             return Err(ProgramError::IncorrectProgramId);
         }
 
+        /// checks rent and rent exemption status below
         let escrow_account = next_account_info(account_info_iter)?;
         let rent = &Rent::from_account_info(next_account_info(account_info_iter)?)?;
         
@@ -62,6 +82,8 @@ impl Processor {
             return Err(ProgramError::AccountAlreadyInitialized);
         }
 
+        // escrow_info.time_out
+        // escrow_info.unlock_time
         escrow_info.is_initialized = true;
         escrow_info.initializer_pubkey = *initializer.key;
         escrow_info.temp_token_account_pubkey = *temp_token_account.key;
@@ -82,6 +104,7 @@ impl Processor {
         )?;
 
         msg!("Calling the token program to transfer token account ownership...");
+        ///allows the program to call instructions of another program
         invoke(
             &owner_change_ix,
             &[
@@ -147,6 +170,7 @@ impl Processor {
             &[&taker.key],
             escrow_info.expected_amount,
         )?;
+
         msg!("Calling the token program to transfer tokens to the escrow's initializer...");
         invoke(
             &transfer_to_initializer_ix,
@@ -168,7 +192,9 @@ impl Processor {
             &[&pda],
             pdas_temp_token_account_info.amount,
         )?;
+
         msg!("Calling the token program to transfer tokens to the taker...");
+        ///is used by programs that have been given authoirty over an account that is used by the instruction. it requires the use of the signer_Seeds to simulate signing
         invoke_signed(
             &transfer_to_taker_ix,
             &[
@@ -187,6 +213,7 @@ impl Processor {
             &pda,
             &[&pda]
         )?;
+
         msg!("Calling the token program to close pda's temp account...");
         invoke_signed(
             &close_pdas_temp_acc_ix,
@@ -198,6 +225,7 @@ impl Processor {
             ],
             &[&[&b"escrow"[..], &[bump_seed]]],
         )?;
+
         msg!("Closing the escrow account...");
         **initializers_main_account.lamports.borrow_mut() = initializers_main_account.lamports()
         .checked_add(escrow_account.lamports())
@@ -206,5 +234,21 @@ impl Processor {
         *escrow_account.try_borrow_mut_data()? = &mut [];
 
         Ok(())
-    }    
+    } 
+    
+    // fn process_cancel(accounts: &[Account], program_id: &Pubkey) -> ProgramResult {
+    //     let account_info_iter = &mut accounts.iter();
+    //     let initializer = next_account_info(
+    //         account
+    //     )
+    // }
+
+
+    //write the reset time lock function
+    //must be called by the initiator and load escrow state
+    //get the clock slot
+    //set the stored time out to current slot +100
+    //set unlock time to current slot + 1000
+    // fn process_reset_time_lock
+
 }
